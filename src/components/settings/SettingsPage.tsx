@@ -1194,6 +1194,8 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
     setIsPushing(true);
     setPushStatus('idle');
     setPushErrorMsg('');
+    localStorage.setItem('github_token', githubToken.trim());
+    localStorage.setItem('github_repo_url', selectedRepoUrl.trim());
     setPushLogs([
       `[${new Date().toLocaleTimeString()}] Initiating push to ${selectedRepoUrl}...`,
       `[Git Config] Branch: ${pushBranch} | Force push: ${forcePush ? 'Yes (--force)' : 'No'}`,
@@ -1233,11 +1235,15 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
         ]);
       } else {
         setPushStatus('error');
-        setPushErrorMsg(data.error || 'Failed to push project to GitHub.');
+        const isPermission403 = data.error && (data.error.includes('403') || data.error.includes('denied'));
+        const friendlyError = isPermission403
+          ? 'GitHub Permission Denied (403): Your Personal Access Token does not have write access to this specific repository. If using a fine-grained token, grant "Repository permissions → Contents: Read and write" and ensure this repo is selected under "Repository access". Or use a Classic Token (ghp_...) with "repo" scope.'
+          : data.error || 'Failed to push project to GitHub.';
+        setPushErrorMsg(friendlyError);
         setPushLogs((prev) => [
           ...prev,
           ...(data.logs || []),
-          `[${new Date().toLocaleTimeString()}] ❌ ERROR: ${data.error || 'Push failed.'}`,
+          `[${new Date().toLocaleTimeString()}] ❌ ERROR: ${friendlyError}`,
         ]);
       }
     } catch (err: any) {

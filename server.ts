@@ -4744,7 +4744,11 @@ app.post('/api/github/push', async (req: Request, res: Response) => {
     });
   } catch (err: any) {
     console.error('Git push error:', err);
-    return res.status(500).json({ success: false, error: err?.message || 'Git push operation failed.' });
+    return res.status(500).json({
+      success: false,
+      error: err?.message || 'Git push operation failed.',
+      logs,
+    });
   }
 });
 
