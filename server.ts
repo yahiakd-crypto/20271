@@ -2,6 +2,7 @@ import express, { Request, Response } from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
+import { execSync } from 'child_process';
 import { GoogleGenAI } from '@google/genai';
 import { buildMasterStoreLandingPageHtml } from './src/utils/masterLandingPageBuilder';
 
@@ -4566,6 +4567,186 @@ The commercial viability of **${title}** in the Algerian e-commerce market is dr
 4. **Ad Launch Phase**: Allocate 3,500 DZD/day CBO campaign on Meta Advantage+ testing 3 video angles.
 5. **Confirmation & Dispatch**: Process all incoming orders within 10 minutes via standardized phone and WhatsApp audio protocols.`;
 }
+
+// =========================================================================
+// GITHUB INTEGRATION & CODE DEPLOYER ENDPOINTS
+// =========================================================================
+
+// 1. Get authenticated user info
+app.get('/api/github/user', async (req: Request, res: Response) => {
+  try {
+    const token =
+      (req.query.token as string) ||
+      req.headers.authorization?.replace(/^Bearer\s+/i, '') ||
+      process.env.GITHUB_TOKEN;
+
+    if (!token) {
+      return res.status(400).json({ success: false, error: 'GitHub Personal Access Token is required.' });
+    }
+
+    const ghRes = await fetch('https://api.github.com/user', {
+      headers: {
+        Authorization: `Bearer ${token.trim()}`,
+        'User-Agent': 'Product-Intelligence-OS',
+        Accept: 'application/vnd.github.v3+json',
+      },
+    });
+
+    if (!ghRes.ok) {
+      const errText = await ghRes.text();
+      return res.status(ghRes.status).json({ success: false, error: `GitHub API error (${ghRes.status}): ${errText}` });
+    }
+
+    const data = await ghRes.json();
+    return res.json({ success: true, user: data });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err?.message || 'Failed to fetch GitHub profile' });
+  }
+});
+
+// 2. Fetch list of repositories for the user
+app.get('/api/github/repos', async (req: Request, res: Response) => {
+  try {
+    const token =
+      (req.query.token as string) ||
+      req.headers.authorization?.replace(/^Bearer\s+/i, '') ||
+      process.env.GITHUB_TOKEN;
+
+    if (!token) {
+      return res.status(400).json({ success: false, error: 'GitHub Personal Access Token is required.' });
+    }
+
+    const ghRes = await fetch('https://api.github.com/user/repos?per_page=100&sort=updated&affiliation=owner,collaborator', {
+      headers: {
+        Authorization: `Bearer ${token.trim()}`,
+        'User-Agent': 'Product-Intelligence-OS',
+        Accept: 'application/vnd.github.v3+json',
+      },
+    });
+
+    if (!ghRes.ok) {
+      const errText = await ghRes.text();
+      return res.status(ghRes.status).json({ success: false, error: `GitHub API error (${ghRes.status}): ${errText}` });
+    }
+
+    const repos = await ghRes.json();
+    return res.json({ success: true, repos });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err?.message || 'Failed to fetch repositories' });
+  }
+});
+
+// 3. Create a new repository on GitHub
+app.post('/api/github/create-repo', async (req: Request, res: Response) => {
+  try {
+    const { token, name, description, isPrivate } = req.body;
+    if (!token || !name) {
+      return res.status(400).json({ success: false, error: 'Token and repository name are required.' });
+    }
+
+    const ghRes = await fetch('https://api.github.com/user/repos', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${token.trim()}`,
+        'User-Agent': 'Product-Intelligence-OS',
+        'Content-Type': 'application/json',
+        Accept: 'application/vnd.github.v3+json',
+      },
+      body: JSON.stringify({
+        name: name.trim(),
+        description: description || 'Product Intelligence OS',
+        private: Boolean(isPrivate),
+        auto_init: false,
+      }),
+    });
+
+    if (!ghRes.ok) {
+      const errText = await ghRes.text();
+      return res.status(ghRes.status).json({ success: false, error: `GitHub create error (${ghRes.status}): ${errText}` });
+    }
+
+    const repo = await ghRes.json();
+    return res.json({ success: true, repo });
+  } catch (err: any) {
+    return res.status(500).json({ success: false, error: err?.message || 'Failed to create repository' });
+  }
+});
+
+// 4. Push local project code to GitHub repository
+app.post('/api/github/push', async (req: Request, res: Response) => {
+  try {
+    const {
+      token,
+      repoUrl,
+      branch = 'main',
+      commitMessage = 'feat: sync project code to GitHub repository',
+      force = false,
+    } = req.body;
+
+    if (!token || !repoUrl) {
+      return res.status(400).json({ success: false, error: 'GitHub token and repository URL are required.' });
+    }
+
+    let cleanUrl = repoUrl.trim();
+    if (!cleanUrl.endsWith('.git')) cleanUrl += '.git';
+
+    // Inject token for authentication: https://<token>@github.com/...
+    const authUrl = cleanUrl.replace(/^https:\/\/(?:[^@]+@)?github\.com\//i, `https://${token.trim()}@github.com/`);
+
+    const logs: string[] = [];
+    const runGit = (cmd: string) => {
+      try {
+        const out = execSync(cmd, { cwd: __dirname, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] });
+        if (out && out.trim()) logs.push(out.trim());
+      } catch (e: any) {
+        const out = (e.stdout ? e.stdout.toString() : '') + (e.stderr ? e.stderr.toString() : '');
+        if (out && out.trim()) logs.push(out.trim());
+        throw new Error(out || e.message);
+      }
+    };
+
+    // Ensure Git author identity is configured
+    try { execSync('git config user.name "yahiakd-crypto"', { cwd: __dirname }); } catch {}
+    try { execSync('git config user.email "yahiakd@users.noreply.github.com"', { cwd: __dirname }); } catch {}
+
+    // 1. Rename branch to target
+    runGit(`git branch -M ${branch}`);
+
+    // 2. Stage changes
+    try {
+      runGit('git add .');
+      runGit(`git commit -m "${commitMessage.replace(/"/g, '\\"')}"`);
+    } catch {
+      logs.push('Working tree clean or already committed.');
+    }
+
+    // 3. Set remote origin
+    try {
+      runGit(`git remote set-url origin ${authUrl}`);
+    } catch {
+      runGit(`git remote add origin ${authUrl}`);
+    }
+
+    // 4. Push to remote
+    const pushCmd = `git push -u origin ${branch}${force ? ' --force' : ''}`;
+    runGit(pushCmd);
+
+    // 5. Clean up remote origin url so token is not stored in plaintext
+    try {
+      execSync(`git remote set-url origin ${cleanUrl}`, { cwd: __dirname });
+    } catch {}
+
+    return res.json({
+      success: true,
+      message: `Successfully pushed project to ${cleanUrl} (${branch})!`,
+      repoUrl: cleanUrl.replace(/\.git$/, ''),
+      logs,
+    });
+  } catch (err: any) {
+    console.error('Git push error:', err);
+    return res.status(500).json({ success: false, error: err?.message || 'Git push operation failed.' });
+  }
+});
 
 // Vite middleware in dev or static files in production
 async function startServer() {
